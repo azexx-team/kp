@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<title>Конфигуратор КП KOBLiK</title>
+<style>
+  :root{--bg:#F1F2F0;--card:#fff;--ink:#1B1E20;--ink2:#4F575C;--line:#C4C9C6;--acc:#E07F00;--err:#B3261E}
+  @media (prefers-color-scheme:dark){:root{--bg:#16181A;--card:#212427;--ink:#ECEDEC;--ink2:#A5ACB0;--line:#3A3F43;--err:#F2948C}}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);color:var(--ink);
+    font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:16px}
+  form{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:28px 24px;width:100%;max-width:380px}
+  h1{font-size:20px;margin:0 0 4px}
+  h1 b{color:var(--acc)}
+  p{margin:0 0 18px;color:var(--ink2);font-size:14px}
+  label{display:block;font-size:13px;color:var(--ink2);margin-bottom:4px}
+  input{width:100%;font:inherit;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink)}
+  input:focus{outline:2px solid var(--acc);outline-offset:1px}
+  button{margin-top:14px;width:100%;font:inherit;font-weight:600;padding:11px;border:0;border-radius:8px;background:var(--acc);color:#fff;cursor:pointer}
+  button:disabled{opacity:.6;cursor:progress}
+  #msg{min-height:1.4em;margin-top:10px;font-size:13px;color:var(--ink2)}
+  #msg.err{color:var(--err)}
+</style>
+</head>
+<body>
+<form id="f" autocomplete="off">
+  <h1>KOBLiK <b>·</b> Конфигуратор КП</h1>
+  <p>Для дилеров и менеджеров KOBLiK. Введите пароль, который вам выдали.</p>
+  <label for="pw">Пароль</label>
+  <input id="pw" type="password" autocomplete="current-password" required autofocus>
+  <button id="go" type="submit">Открыть</button>
+  <div id="msg" role="status"></div>
+</form>
+<script>
+/* Конфигуратор лежит рядом в kp.enc: gzip -> AES-256-GCM, ключ из пароля через PBKDF2-SHA256.
+   Формат kp.enc: "KPE1" | соль 16 байт | iv 12 байт | шифртекст. Без пароля файл нечитаем. */
+const ITER = 600000;
+const msg = (t, err) => { const m = document.getElementById('msg'); m.textContent = t; m.className = err ? 'err' : ''; };
+let blob = null;
+async function load(){ if (blob) return blob; const r = await fetch('kp.enc', { cache: 'no-store' });
+  if (!r.ok) throw new Error('файл конфигуратора не загрузился (' + r.status + ')'); return blob = new Uint8Array(await r.arrayBuffer()); }
+load().catch(() => {});
+document.getElementById('f').addEventListener('submit', async e => {
+  e.preventDefault(); const btn = document.getElementById('go'); btn.disabled = true; msg('Проверяю пароль…');
+  try {
+    if (!window.crypto || !crypto.subtle || !window.DecompressionStream) throw new Error('браузер устарел — откройте в свежем Chrome, Яндекс Браузере или Edge');
+    const b = await load();
+    if (String.fromCharCode(...b.slice(0, 4)) !== 'KPE1') throw new Error('файл конфигуратора повреждён');
+    const salt = b.slice(4, 20), iv = b.slice(20, 32), data = b.slice(32);
+    const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(document.getElementById('pw').value), 'PBKDF2', false, ['deriveKey']);
+    const key = await crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: ITER, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+    let plain;
+    try { plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data); }
+    catch (_) { msg('Неверный пароль.', true); btn.disabled = false; document.getElementById('pw').select(); return; }
+    msg('Открываю конфигуратор…');
+    const html = await new Response(new Blob([plain]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+    document.open(); document.write(html); document.close();
+  } catch (err) { msg('Не получилось: ' + (err && err.message || err), true); btn.disabled = false; }
+});
+</script>
+</body>
+</html>
